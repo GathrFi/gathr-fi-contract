@@ -40,20 +40,20 @@ contract GathrFi is ReentrancyGuard, Ownable, Pausable {
     IERC20 public immutable usdcToken;
     uint16 public constant REFERRAL_CODE = 0;
 
-    event FundsDeposited(address user, uint256 amount);
-    event FundsWithdrawn(address user, uint256 amount);
-    event GroupCreated(uint256 groupId, string name, address[] members);
+    event FundsDeposited(address indexed user, uint256 amount);
+    event FundsWithdrawn(address indexed user, uint256 amount);
+    event GroupCreated(uint256 indexed groupId, string name, address[] members);
     event ExpenseAdded(
-        uint256 groupId,
-        uint256 expenseId,
-        address payer,
+        uint256 indexed groupId,
+        uint256 indexed expenseId,
+        address indexed payer,
         uint256 amount,
         string description
     );
     event ExpenseSettled(
-        uint256 groupId,
-        uint256 expenseId,
-        address member,
+        uint256 indexed groupId,
+        uint256 indexed expenseId,
+        address indexed member,
         uint256 amount
     );
 
