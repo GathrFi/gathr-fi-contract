@@ -186,15 +186,20 @@ contract GathrFi is ReentrancyGuard, Ownable, Pausable {
     function withdrawFunds(uint256 _amount) external {
         require(userBalances[msg.sender] >= _amount, "Insufficient balance");
 
-        aavePool.withdraw(address(usdcToken), _amount, address(this));
+        uint256 amountWithYiled = aavePool.withdraw(
+            address(usdcToken),
+            _amount,
+            address(this)
+        );
+
         userBalances[msg.sender] -= _amount;
 
         require(
-            usdcToken.transfer(msg.sender, _amount),
+            usdcToken.transfer(msg.sender, amountWithYiled),
             "USDC transfer failed"
         );
 
-        emit FundsWithdrawn(msg.sender, _amount);
+        emit FundsWithdrawn(msg.sender, amountWithYiled);
     }
 
     function getGroup(
@@ -235,5 +240,9 @@ contract GathrFi is ReentrancyGuard, Ownable, Pausable {
     ) external view returns (uint256) {
         require(groups[_groupId].exists, "Group does not exists");
         return expenses[_groupId][_expenseId].splits[_member];
+    }
+
+    function getUserYield(address user) external view returns (uint256) {
+        return aavePool.getUserYield(user);
     }
 }

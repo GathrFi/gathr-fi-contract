@@ -17,4 +17,6 @@ interface IAavePool {
         uint256 amount,
         address to
     ) external returns (uint256);
+
+    function getUserYield(address user) external view returns (uint256);
 }

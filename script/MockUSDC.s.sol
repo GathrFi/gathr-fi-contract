@@ -2,16 +2,16 @@
 pragma solidity ^0.8.30;
 
 import {Script, console} from "forge-std/Script.sol";
-import {GathrFi} from "../src/GathrFi.sol";
+import {MockUSDC} from "../src/MockUSDC.sol";
 
 contract CounterScript is Script {
-    GathrFi public gathrFi;
+    MockUSDC public usdc;
 
     function setUp() public {}
 
     function run() public {
         vm.startBroadcast();
-        // gathrFi = new GathrFi();
+        usdc = new MockUSDC();
         vm.stopBroadcast();
     }
 }
