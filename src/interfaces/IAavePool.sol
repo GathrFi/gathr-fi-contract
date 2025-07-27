@@ -5,12 +5,7 @@ pragma solidity ^0.8.30;
 // https://aave.com/docs/developers/smart-contracts/pool
 
 interface IAavePool {
-    function supply(
-        address asset,
-        uint256 amount,
-        address onBehalfOf,
-        uint16 referralCode
-    ) external;
+    function supply(address asset, uint256 amount, address onBehalfOf) external;
 
     function withdraw(
         address asset,

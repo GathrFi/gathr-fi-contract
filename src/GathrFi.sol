@@ -17,6 +17,7 @@ import "./interfaces/IAavePool.sol";
 contract GathrFi is ReentrancyGuard, Ownable, Pausable {
     struct Group {
         string name;
+        address admin;
         address[] members;
         bool exists;
     }
@@ -24,21 +25,32 @@ contract GathrFi is ReentrancyGuard, Ownable, Pausable {
     struct Expense {
         address payer;
         uint256 amount;
+        uint256 settledAmount;
         string description;
         mapping(address => uint256) splits;
-        bool settled;
+        mapping(address => bool) hasSettled;
+        bool fullySettled;
+    }
+
+    struct ExpenseInfo {
+        uint256 expenseId;
+        address payer;
+        uint256 amount;
+        uint256 settledAmount;
+        string description;
+        bool fullySettled;
     }
 
     mapping(uint256 => Group) public groups;
     mapping(uint256 => mapping(uint256 => Expense)) public expenses;
     mapping(uint256 => uint256) public groupExpenseCount;
     mapping(address => uint256) public userBalances;
+    mapping(address => uint256[]) public userGroups;
     uint256 public groupCount;
 
     using SafeERC20 for IERC20;
     IERC20 public immutable usdcToken;
     IAavePool public immutable aavePool;
-    uint16 public constant REFERRAL_CODE = 0;
 
     event FundsDeposited(address indexed user, uint256 amount);
     event FundsWithdrawn(address indexed user, uint256 amount);
@@ -49,6 +61,12 @@ contract GathrFi is ReentrancyGuard, Ownable, Pausable {
         address indexed payer,
         uint256 amount,
         string description
+    );
+    event ExpenseSplit(
+        uint256 indexed groupId,
+        uint256 indexed expenseId,
+        address[] splitMembers,
+        uint256[] splitAmounts
     );
     event ExpenseSettled(
         uint256 indexed groupId,
@@ -70,10 +88,22 @@ contract GathrFi is ReentrancyGuard, Ownable, Pausable {
 
         Group storage newGroup = groups[groupCount];
         newGroup.name = _name;
-        newGroup.members = _members;
+        newGroup.admin = msg.sender;
         newGroup.exists = true;
 
-        emit GroupCreated(groupCount, _name, _members);
+        address[] memory members = new address[](_members.length + 1);
+        members[0] = msg.sender;
+        for (uint256 i = 0; i < _members.length; i++) {
+            members[i + 1] = _members[i];
+        }
+
+        newGroup.members = members;
+        userGroups[msg.sender].push(groupCount);
+        for (uint256 i = 0; i < _members.length; i++) {
+            userGroups[_members[i]].push(groupCount);
+        }
+
+        emit GroupCreated(groupCount, _name, members);
     }
 
     function addExpense(
@@ -83,7 +113,7 @@ contract GathrFi is ReentrancyGuard, Ownable, Pausable {
         address[] memory _splitMembers,
         uint256[] memory _splitAmounts
     ) external {
-        require(groups[_groupId].exists, "Group does not exists");
+        require(groups[_groupId].exists, "Group does not exist");
         require(
             _splitMembers.length == _splitAmounts.length,
             "Mismatched splits"
@@ -95,16 +125,29 @@ contract GathrFi is ReentrancyGuard, Ownable, Pausable {
 
         newExpense.payer = msg.sender;
         newExpense.amount = _amount;
+        newExpense.settledAmount = 0;
         newExpense.description = _description;
-        newExpense.settled = false;
+        newExpense.fullySettled = false;
 
         uint256 totalSplit = 0;
         for (uint256 i = 0; i < _splitMembers.length; i++) {
-            newExpense.splits[_splitMembers[i]] = _splitAmounts[i];
+            if (_splitMembers[i] == msg.sender) {
+                newExpense.splits[_splitMembers[i]] = 0;
+                newExpense.hasSettled[_splitMembers[i]] = true;
+                newExpense.settledAmount += _splitAmounts[i];
+            } else {
+                newExpense.splits[_splitMembers[i]] = _splitAmounts[i];
+                newExpense.hasSettled[_splitMembers[i]] = false;
+            }
+
             totalSplit += _splitAmounts[i];
         }
 
         require(totalSplit == _amount, "Split amounts must be equal total");
+
+        if (newExpense.settledAmount == _amount) {
+            newExpense.fullySettled = true;
+        }
 
         emit ExpenseAdded(
             _groupId,
@@ -113,6 +156,8 @@ contract GathrFi is ReentrancyGuard, Ownable, Pausable {
             _amount,
             _description
         );
+
+        emit ExpenseSplit(_groupId, expenseId, _splitMembers, _splitAmounts);
     }
 
     function depositFunds(uint256 _amount) external {
@@ -126,22 +171,18 @@ contract GathrFi is ReentrancyGuard, Ownable, Pausable {
             "USDC approval failed"
         );
 
-        aavePool.supply(
-            address(usdcToken),
-            _amount,
-            address(this),
-            REFERRAL_CODE
-        );
-
+        aavePool.supply(address(usdcToken), _amount, address(this));
         userBalances[msg.sender] += _amount;
+
         emit FundsDeposited(msg.sender, _amount);
     }
 
     function settleExpense(uint256 _groupId, uint256 _expenseId) external {
-        require(groups[_groupId].exists, "Group does not exists");
+        require(groups[_groupId].exists, "Group does not exist");
 
         Expense storage expense = expenses[_groupId][_expenseId];
-        require(!expense.settled, "Expense already settled");
+        require(!expense.fullySettled, "Expense already fully settled");
+        require(!expense.hasSettled[msg.sender], "Member already settled");
 
         uint256 amountOwed = expense.splits[msg.sender];
         require(amountOwed > 0, "No amount owed by caller");
@@ -159,25 +200,13 @@ contract GathrFi is ReentrancyGuard, Ownable, Pausable {
             "USDC approval failed"
         );
 
-        aavePool.supply(
-            address(usdcToken),
-            amountOwed,
-            address(this),
-            REFERRAL_CODE
-        );
-
+        aavePool.supply(address(usdcToken), amountOwed, address(this));
         expense.splits[msg.sender] = 0;
+        expense.hasSettled[msg.sender] = true;
+        expense.settledAmount += amountOwed;
 
-        bool allSettled = true;
-        for (uint256 i = 0; i < groups[_groupId].members.length; i++) {
-            if (expense.splits[groups[_groupId].members[i]] > 0) {
-                allSettled = false;
-                break;
-            }
-        }
-
-        if (allSettled) {
-            expense.settled = true;
+        if (expense.settledAmount == expense.amount) {
+            expense.fullySettled = true;
         }
 
         emit ExpenseSettled(_groupId, _expenseId, msg.sender, amountOwed);
@@ -205,7 +234,7 @@ contract GathrFi is ReentrancyGuard, Ownable, Pausable {
     function getGroup(
         uint256 _groupId
     ) external view returns (string memory name, address[] memory members) {
-        require(groups[_groupId].exists, "Group does not exists");
+        require(groups[_groupId].exists, "Group does not exist");
         return (groups[_groupId].name, groups[_groupId].members);
     }
 
@@ -218,18 +247,20 @@ contract GathrFi is ReentrancyGuard, Ownable, Pausable {
         returns (
             address payer,
             uint256 amount,
+            uint256 settledAmount,
             string memory description,
-            bool settled
+            bool fullySettled
         )
     {
-        require(groups[_groupId].exists, "Group does not exists");
+        require(groups[_groupId].exists, "Group does not exist");
 
         Expense storage expense = expenses[_groupId][_expenseId];
         return (
             expense.payer,
             expense.amount,
+            expense.settledAmount,
             expense.description,
-            expense.settled
+            expense.fullySettled
         );
     }
 
@@ -238,11 +269,83 @@ contract GathrFi is ReentrancyGuard, Ownable, Pausable {
         uint256 _expenseId,
         address _member
     ) external view returns (uint256) {
-        require(groups[_groupId].exists, "Group does not exists");
+        require(groups[_groupId].exists, "Group does not exist");
         return expenses[_groupId][_expenseId].splits[_member];
     }
 
-    function getUserYield(address user) external view returns (uint256) {
-        return aavePool.getUserYield(user);
+    function hasSettled(
+        uint256 _groupId,
+        uint256 _expenseId,
+        address _member
+    ) external view returns (bool) {
+        require(groups[_groupId].exists, "Group does not exist");
+        return expenses[_groupId][_expenseId].hasSettled[_member];
+    }
+
+    function getUserYield(address _user) external view returns (uint256) {
+        return aavePool.getUserYield(_user);
+    }
+
+    /**
+     * @dev Calling this function will requires high gas fees.
+     * This function is keep as the on-chain fallback options besides indexer.
+     */
+    function getUserGroups(
+        address _user
+    ) external view returns (Group[] memory items) {
+        uint256[] memory groupIds = userGroups[_user];
+
+        items = new Group[](groupIds.length);
+        for (uint256 i = 0; i < groupIds.length; i++) {
+            Group storage group = groups[groupIds[i]];
+            items[i] = Group({
+                name: group.name,
+                admin: group.admin,
+                members: group.members,
+                exists: group.exists
+            });
+        }
+
+        return items;
+    }
+
+    /**
+     * @dev Calling this function will requires high gas fees.
+     * This function is keep as the on-chain fallback options besides indexer.
+     */
+    function getGroupExpenses(
+        uint256 _groupId,
+        uint256 _startIndex,
+        uint256 _maxCount
+    ) external view returns (ExpenseInfo[] memory items) {
+        require(groups[_groupId].exists, "Group does not exist");
+
+        uint256 expenseCount = groupExpenseCount[_groupId];
+        require(_startIndex <= expenseCount, "Invalid start index");
+
+        uint256 endIndex = _startIndex + _maxCount;
+        if (endIndex > expenseCount) {
+            endIndex = expenseCount;
+        }
+
+        uint256 returnCount = endIndex >= _startIndex
+            ? endIndex - _startIndex
+            : 0;
+
+        items = new ExpenseInfo[](returnCount);
+        for (uint256 i = 0; i < returnCount; i++) {
+            uint256 expenseId = _startIndex + i;
+            Expense storage expense = expenses[_groupId][expenseId];
+            items[i] = ExpenseInfo({
+                expenseId: expenseId,
+                payer: expense.payer,
+                amount: expense.amount,
+                settledAmount: expense.settledAmount,
+                description: expense.description,
+                fullySettled: expense.fullySettled
+            });
+        }
+
+        return items;
     }
 }
