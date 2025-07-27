@@ -36,8 +36,8 @@ contract GathrFi is ReentrancyGuard, Ownable, Pausable {
     uint256 public groupCount;
 
     using SafeERC20 for IERC20;
-    IAavePool public immutable aavePool;
     IERC20 public immutable usdcToken;
+    IAavePool public immutable aavePool;
     uint16 public constant REFERRAL_CODE = 0;
 
     event FundsDeposited(address indexed user, uint256 amount);
@@ -57,9 +57,9 @@ contract GathrFi is ReentrancyGuard, Ownable, Pausable {
         uint256 amount
     );
 
-    constructor(address _aavePool, address _usdcToken) Ownable(msg.sender) {
-        aavePool = IAavePool(_aavePool);
+    constructor(address _usdcToken, address _aavePool) Ownable(msg.sender) {
         usdcToken = IERC20(_usdcToken);
+        aavePool = IAavePool(_aavePool);
     }
 
     function createGroup(
