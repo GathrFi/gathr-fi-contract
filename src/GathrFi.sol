@@ -25,7 +25,7 @@ contract GathrFi is ReentrancyGuard, Ownable, Pausable {
     struct Expense {
         address payer;
         uint256 amount;
-        uint256 settledAmount;
+        uint256 amountSettled;
         string description;
         mapping(address => uint256) splits;
         mapping(address => bool) hasSettled;
@@ -36,7 +36,7 @@ contract GathrFi is ReentrancyGuard, Ownable, Pausable {
         uint256 expenseId;
         address payer;
         uint256 amount;
-        uint256 settledAmount;
+        uint256 amountSettled;
         string description;
         bool fullySettled;
     }
@@ -54,7 +54,12 @@ contract GathrFi is ReentrancyGuard, Ownable, Pausable {
 
     event FundsDeposited(address indexed user, uint256 amount);
     event FundsWithdrawn(address indexed user, uint256 amount);
-    event GroupCreated(uint256 indexed groupId, string name, address[] members);
+    event GroupCreated(
+        uint256 indexed groupId,
+        string name,
+        address indexed admin,
+        address[] members
+    );
     event ExpenseAdded(
         uint256 indexed groupId,
         uint256 indexed expenseId,
@@ -103,7 +108,7 @@ contract GathrFi is ReentrancyGuard, Ownable, Pausable {
             userGroups[_members[i]].push(groupCount);
         }
 
-        emit GroupCreated(groupCount, _name, members);
+        emit GroupCreated(groupCount, _name, msg.sender, members);
     }
 
     function addExpense(
@@ -125,7 +130,7 @@ contract GathrFi is ReentrancyGuard, Ownable, Pausable {
 
         newExpense.payer = msg.sender;
         newExpense.amount = _amount;
-        newExpense.settledAmount = 0;
+        newExpense.amountSettled = 0;
         newExpense.description = _description;
         newExpense.fullySettled = false;
 
@@ -134,7 +139,7 @@ contract GathrFi is ReentrancyGuard, Ownable, Pausable {
             if (_splitMembers[i] == msg.sender) {
                 newExpense.splits[_splitMembers[i]] = 0;
                 newExpense.hasSettled[_splitMembers[i]] = true;
-                newExpense.settledAmount += _splitAmounts[i];
+                newExpense.amountSettled += _splitAmounts[i];
             } else {
                 newExpense.splits[_splitMembers[i]] = _splitAmounts[i];
                 newExpense.hasSettled[_splitMembers[i]] = false;
@@ -145,7 +150,7 @@ contract GathrFi is ReentrancyGuard, Ownable, Pausable {
 
         require(totalSplit == _amount, "Split amounts must be equal total");
 
-        if (newExpense.settledAmount == _amount) {
+        if (newExpense.amountSettled == _amount) {
             newExpense.fullySettled = true;
         }
 
@@ -203,9 +208,9 @@ contract GathrFi is ReentrancyGuard, Ownable, Pausable {
         aavePool.supply(address(usdcToken), amountOwed, address(this));
         expense.splits[msg.sender] = 0;
         expense.hasSettled[msg.sender] = true;
-        expense.settledAmount += amountOwed;
+        expense.amountSettled += amountOwed;
 
-        if (expense.settledAmount == expense.amount) {
+        if (expense.amountSettled == expense.amount) {
             expense.fullySettled = true;
         }
 
@@ -258,7 +263,7 @@ contract GathrFi is ReentrancyGuard, Ownable, Pausable {
         return (
             expense.payer,
             expense.amount,
-            expense.settledAmount,
+            expense.amountSettled,
             expense.description,
             expense.fullySettled
         );
@@ -340,7 +345,7 @@ contract GathrFi is ReentrancyGuard, Ownable, Pausable {
                 expenseId: expenseId,
                 payer: expense.payer,
                 amount: expense.amount,
-                settledAmount: expense.settledAmount,
+                amountSettled: expense.amountSettled,
                 description: expense.description,
                 fullySettled: expense.fullySettled
             });

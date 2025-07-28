@@ -117,14 +117,14 @@ contract GathrFiTest is Test {
         (
             address payer,
             uint256 amount,
-            uint256 settledAmount,
+            uint256 amountSettled,
             string memory description,
             bool fullySettled
         ) = gathrFi.getExpense(1, 1);
 
         assertEq(payer, user1);
         assertEq(amount, EXPENSE_AMOUNT);
-        assertEq(settledAmount, EXPENSE_AMOUNT / 3);
+        assertEq(amountSettled, EXPENSE_AMOUNT / 3);
         assertEq(description, "Dinner");
         assertEq(fullySettled, false);
         assertEq(gathrFi.hasSettled(1, 1, user1), true);
