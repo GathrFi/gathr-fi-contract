@@ -3,12 +3,10 @@ pragma solidity ^0.8.30;
 
 import "forge-std/Test.sol";
 import {MockUSDC} from "../src/MockUSDC.sol";
-import {MockAavePool} from "../src/MockAavePool.sol";
 import {GathrFi} from "../src/GathrFi.sol";
 
 contract GathrFiTest is Test {
     MockUSDC mockUSDCToken;
-    MockAavePool mockAavePool;
     GathrFi gathrFi;
 
     address owner = address(0x1);
@@ -23,11 +21,10 @@ contract GathrFiTest is Test {
     function setUp() public {
         // Deploy mocked contracts
         mockUSDCToken = new MockUSDC();
-        mockAavePool = new MockAavePool(address(mockUSDCToken));
 
         // Deploy GathrFi contract
         vm.startPrank(owner);
-        gathrFi = new GathrFi(address(mockUSDCToken), address(mockAavePool));
+        gathrFi = new GathrFi(address(mockUSDCToken));
         vm.stopPrank();
 
         // Mint USDC to test users
@@ -60,30 +57,6 @@ contract GathrFiTest is Test {
         assertEq(members[1], user2);
         assertEq(members[2], user3);
         assertEq(gathrFi.groupCount(), 1);
-    }
-
-    function test_DepositFunds() public {
-        uint256 initialBalance = mockUSDCToken.balanceOf(user1);
-
-        vm.prank(user1);
-        gathrFi.depositFunds(DEPOSIT_AMOUNT);
-
-        assertEq(gathrFi.userBalances(user1), DEPOSIT_AMOUNT);
-        assertEq(
-            mockUSDCToken.balanceOf(user1),
-            initialBalance - DEPOSIT_AMOUNT
-        );
-        assertEq(mockUSDCToken.balanceOf(address(gathrFi)), 0);
-        assertEq(
-            mockUSDCToken.balanceOf(address(mockAavePool)),
-            DEPOSIT_AMOUNT
-        );
-    }
-
-    function test_RevertWhen_DepositFunds_ZeroAmount() public {
-        vm.expectRevert();
-        vm.prank(user1);
-        gathrFi.depositFunds(0);
     }
 
     function test_AddExpense() public {
@@ -211,26 +184,17 @@ contract GathrFiTest is Test {
             splitAmounts
         );
 
-        // Deposit funds (user2)
-        vm.prank(user2);
-        gathrFi.depositFunds(DEPOSIT_AMOUNT);
-
-        // Settle expense (user2)
+        // Settle expense (user2) - direct USDC transfer
         vm.prank(user2);
         gathrFi.settleExpense(1, 1);
 
         assertEq(gathrFi.getAmountOwed(1, 1, user2), 0);
         assertEq(gathrFi.hasSettled(1, 1, user2), true);
-        assertEq(
-            gathrFi.userBalances(user2),
-            DEPOSIT_AMOUNT - (EXPENSE_AMOUNT / 3)
-        );
-        assertEq(gathrFi.userBalances(user1), EXPENSE_AMOUNT / 3);
     }
 
     function test_SettleExpense_InsufficientBalance() public {
         // Create group and add expense to group
-        address[] memory groupMembers = new address[](3);
+        address[] memory groupMembers = new address[](2);
         groupMembers[0] = user2;
         groupMembers[1] = user3;
 
@@ -255,41 +219,114 @@ contract GathrFiTest is Test {
             splitAmounts
         );
 
-        // Settle expense (user2)
+        // Try to settle without sufficient USDC approval or balance
+        // First remove approval
+        vm.prank(user2);
+        mockUSDCToken.approve(address(gathrFi), 0);
+
+        // Settle expense should fail due to insufficient approval
         vm.expectRevert();
         vm.prank(user2);
         gathrFi.settleExpense(1, 1);
     }
 
-    function test_WithdrawFunds() public {
-        // Deposit funds
-        vm.prank(user1);
-        gathrFi.depositFunds(DEPOSIT_AMOUNT);
-
-        // Fast forward time to accrue yield
-        vm.warp(block.timestamp + 7 days);
-
-        uint256 expectedYield = mockAavePool.calculateYield(
-            DEPOSIT_AMOUNT,
-            block.timestamp - 7 days
-        );
-
-        uint256 balanceBefore = mockUSDCToken.balanceOf(user1);
+    function test_AddInstantExpense() public {
+        address[] memory splitMembers = new address[](3);
+        splitMembers[0] = user1;
+        splitMembers[1] = user2;
+        splitMembers[2] = user3;
+        uint256[] memory splitAmounts = new uint256[](3);
+        splitAmounts[0] = EXPENSE_AMOUNT / 3;
+        splitAmounts[1] = EXPENSE_AMOUNT / 3;
+        splitAmounts[2] = EXPENSE_AMOUNT / 3;
 
         vm.prank(user1);
-        gathrFi.withdrawFunds(DEPOSIT_AMOUNT);
-
-        assertEq(gathrFi.userBalances(user1), 0);
-        assertEq(
-            mockUSDCToken.balanceOf(user1),
-            balanceBefore + DEPOSIT_AMOUNT + expectedYield
+        gathrFi.addInstantExpense(
+            EXPENSE_AMOUNT,
+            "Quick Lunch",
+            splitMembers,
+            splitAmounts
         );
-        assertEq(mockUSDCToken.balanceOf(address(mockAavePool)), 0);
+
+        (
+            address payer,
+            uint256 amount,
+            uint256 amountSettled,
+            string memory description,
+            bool fullySettled,
+            uint256 timestamp
+        ) = gathrFi.getInstantExpense(1);
+
+        assertEq(payer, user1);
+        assertEq(amount, EXPENSE_AMOUNT);
+        assertEq(amountSettled, EXPENSE_AMOUNT / 3);
+        assertEq(description, "Quick Lunch");
+        assertEq(fullySettled, false);
+        assertEq(timestamp, block.timestamp);
+        assertEq(gathrFi.hasSettledInstant(1, user1), true);
+        assertEq(gathrFi.getInstantAmountOwed(1, user1), 0);
+        assertEq(gathrFi.getInstantAmountOwed(1, user2), EXPENSE_AMOUNT / 3);
+        assertEq(gathrFi.getInstantAmountOwed(1, user3), EXPENSE_AMOUNT / 3);
     }
 
-    function test_RevertWhen_WithdrawFunds_InsufficientBalance() public {
-        vm.expectRevert();
+    function test_SettleInstantExpense() public {
+        address[] memory splitMembers = new address[](3);
+        splitMembers[0] = user1;
+        splitMembers[1] = user2;
+        splitMembers[2] = user3;
+        uint256[] memory splitAmounts = new uint256[](3);
+        splitAmounts[0] = EXPENSE_AMOUNT / 3;
+        splitAmounts[1] = EXPENSE_AMOUNT / 3;
+        splitAmounts[2] = EXPENSE_AMOUNT / 3;
+
         vm.prank(user1);
-        gathrFi.withdrawFunds(DEPOSIT_AMOUNT);
+        gathrFi.addInstantExpense(
+            EXPENSE_AMOUNT,
+            "Quick Lunch",
+            splitMembers,
+            splitAmounts
+        );
+
+        // Settle instant expense (user2)
+        vm.prank(user2);
+        gathrFi.settleInstantExpense(1);
+
+        assertEq(gathrFi.getInstantAmountOwed(1, user2), 0);
+        assertEq(gathrFi.hasSettledInstant(1, user2), true);
+
+        // Check that settlement amount was properly updated
+        (, , uint256 amountSettled, , bool fullySettled, ) = gathrFi
+            .getInstantExpense(1);
+        assertEq(amountSettled, (EXPENSE_AMOUNT / 3) * 2); // payer + one settlement
+        assertEq(fullySettled, false); // user3 hasn't settled yet
+    }
+
+    function test_RevertWhen_SettleInstantExpense_InsufficientBalance() public {
+        address[] memory splitMembers = new address[](3);
+        splitMembers[0] = user1;
+        splitMembers[1] = user2;
+        splitMembers[2] = user3;
+        uint256[] memory splitAmounts = new uint256[](3);
+        splitAmounts[0] = EXPENSE_AMOUNT / 3;
+        splitAmounts[1] = EXPENSE_AMOUNT / 3;
+        splitAmounts[2] = EXPENSE_AMOUNT / 3;
+
+        vm.prank(user1);
+        gathrFi.addInstantExpense(
+            EXPENSE_AMOUNT,
+            "Quick Lunch",
+            splitMembers,
+            splitAmounts
+        );
+
+        // Try to settle without sufficient USDC approval
+        // Remove approval
+        vm.prank(user2);
+        mockUSDCToken.approve(address(gathrFi), 0);
+
+        // Settle should fail due to insufficient approval
+        vm.expectRevert();
+        vm.prank(user2);
+        gathrFi.settleInstantExpense(1);
     }
 }

@@ -8,7 +8,6 @@ import {GathrFi} from "../src/GathrFi.sol";
 
 contract GathrFiScript is Script {
     MockUSDC public mockUSDCToken;
-    MockAavePool public mockAavePool;
     GathrFi public gathrFi;
 
     function setUp() public {}
@@ -19,10 +18,7 @@ contract GathrFiScript is Script {
         mockUSDCToken = new MockUSDC();
         console.log("MockUSDC deployed at:", address(mockUSDCToken));
 
-        mockAavePool = new MockAavePool(address(mockUSDCToken));
-        console.log("MocMockAavePoolkUSDC deployed at:", address(mockAavePool));
-
-        gathrFi = new GathrFi(address(mockUSDCToken), address(mockAavePool));
+        gathrFi = new GathrFi(address(mockUSDCToken));
         console.log("GathrFi deployed at:", address(gathrFi));
 
         vm.stopBroadcast();
